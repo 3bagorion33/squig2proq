@@ -10,17 +10,52 @@ import os
 import ctypes.wintypes
 import json
 import sys
-from squig2proq.ir_utils import fir_from_peq_linear_phase, impulse_response_from_peq, save_ir_to_wav
-from squig2proq.ir_utils import fir_from_peq_mixed_phase, apply_tilt_conv_min_phase, apply_tilt_conv_linear_phase, apply_tilt
+import ctypes
+
+def get_window_rect(hwnd):
+    # Получить глобальные координаты окна через WinAPI
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+
+def get_virtual_screen_size():
+    # Получить размеры виртуального рабочего стола (все мониторы)
+    SM_XVIRTUALSCREEN = 76
+    SM_YVIRTUALSCREEN = 77
+    SM_CXVIRTUALSCREEN = 78
+    SM_CYVIRTUALSCREEN = 79
+    user32 = ctypes.windll.user32
+    x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    w = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+    h = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+    return x, y, w, h
 
 def load_config():
-    # ...existing code from gui.py...
     CONFIG_DIR = Path.home() / ".squig2proq"
     CONFIG_PATH = CONFIG_DIR / "config.json"
     if (CONFIG_PATH.exists()):
         try:
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                config = json.load(f)
+            # Проверяем координаты окна относительно виртуального экрана
+            x, y = config.get('window_x'), config.get('window_y')
+            w, h = config.get('window_width'), config.get('window_height')
+            if x is not None and y is not None and w is not None and h is not None:
+                try:
+                    vx, vy, vw, vh = get_virtual_screen_size()
+                    # Если окно вне виртуального экрана — сбрасываем
+                    if not (vx <= x <= vx+vw-50 and vy <= y <= vy+vh-50):
+                        config['window_x'] = None
+                        config['window_y'] = None
+                        config['window_width'] = None
+                        config['window_height'] = None
+                except Exception:
+                    config['window_x'] = None
+                    config['window_y'] = None
+                    config['window_width'] = None
+                    config['window_height'] = None
+            return config
         except Exception as e:
             print("Error reading config:", e)
     return {
@@ -30,11 +65,16 @@ def load_config():
         "adjust_q": False,
         "ir_type": "Linear Phase",
         "ir_fs": 48000,
-        "ir_export_dir": ""
+        "ir_export_dir": "",
+        "window_x": None,        
+        "window_y": None,
+        "window_width": None,
+        "window_height": None,
+        "link_ir": False,
+        "link_wav_dir": ""
     }
 
 def save_config(**kwargs):
-    # ...existing code from gui.py...
     CONFIG_DIR = Path.home() / ".squig2proq"
     CONFIG_PATH = CONFIG_DIR / "config.json"
     config = load_config()
@@ -65,24 +105,25 @@ def load_from_path(path, update_file_name, state):
             content = f.read()
         filters, preamp_val = parse_filter_text(content)
         state['filters'] = filters
-        state['preamp'].set(preamp_val)
+        if state['preamp'].get() == 0.0:
+            state['preamp'].set(preamp_val)
         for row in state['tree'].get_children():
             state['tree'].delete(row)
         for f in filters:
             state['tree'].insert('', tk.END, values=(f['Type'], f['Frequency'], f['Gain'], f['Q']))
         state['current_file'].set(path)
         state['status_var'].set(f"Loaded file: {path}")
+
+        # Новая логика для override_name
+        if state['override_name'].get():
+            file_name = Path(path).stem
+            state['file_name'].set(file_name)
+
         save_config(
             last_file=state['current_file'].get(),
-            export_dir=state['save_dir'].get(),
             last_file_name=state['file_name'].get(),
-            adjust_q=state['adjust_q'].get(),
-            ir_type=state['ir_type'].get(),
-            ir_fs=state['ir_fs'].get(),
-            ir_export_dir=state['ir_save_dir'].get(),
-            tilt=state['tilt'].get(),
             preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get()
+            link_ir=state['link_ir'].get(),
         )
     except Exception as e:
         state['status_var'].set(f"Error loading file: {e}")
@@ -110,7 +151,9 @@ def choose_file(state):
             ir_export_dir=state['ir_save_dir'].get(),
             tilt=state['tilt'].get(),
             preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get()
+            subsonic=state['subsonic'].get(),
+            subsonic_freq=state['subsonic_freq'].get(),
+            link_ir=state['link_ir'].get(),
         )
 
 def export_ffp(state):
@@ -155,7 +198,9 @@ def export_ffp(state):
             ir_export_dir=state['ir_save_dir'].get(),
             tilt=state['tilt'].get(),
             preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get()
+            subsonic=state['subsonic'].get(),
+            subsonic_freq=state['subsonic_freq'].get(),
+            link_ir=state['link_ir'].get(),
         )
     except Exception as e:
         state['status_var'].set(f"Error saving file: {e}")
@@ -186,13 +231,16 @@ def save_ir_wav(state):
             ir_export_dir=state['ir_save_dir'].get(),
             tilt=state['tilt'].get(),
             preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get()
+            subsonic=state['subsonic'].get(),
+            subsonic_freq=state['subsonic_freq'].get(),
+            link_ir=state['link_ir'].get(),
         )
         state['status_var'].set(f"Директория для IR выбрана: {dir_path}")
 
 def export_ir(state):
-    from squig2proq.ir_utils import fir_from_peq_linear_phase, impulse_response_from_peq, save_ir_to_wav
+    from squig2proq.ir_utils import fir_from_peq_linear_phase, fir_from_peq_min_phase, save_ir_to_wav
     from squig2proq.ir_utils import fir_from_peq_mixed_phase
+    import os
     filters = state.get('filters', [])
     if not filters:
         state['status_var'].set("No filters to export.")
@@ -203,17 +251,17 @@ def export_ir(state):
     tilt_db = state['tilt'].get()
     preamp_db = state['preamp'].get()
     if state['ir_type'].get() == "Minimum Phase":
-        fir = impulse_response_from_peq(filters, fs, length, preamp=preamp_db, tilt=tilt_db)
+        fir = fir_from_peq_min_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=state['subsonic_freq'].get() if state['subsonic'].get() else None)
     elif state['ir_type'].get() == "Linear Phase":
-        fir = fir_from_peq_linear_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db)
+        fir = fir_from_peq_linear_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=state['subsonic_freq'].get() if state['subsonic'].get() else None)
     elif state['ir_type'].get() == "Mixed Phase":
-        fir = fir_from_peq_mixed_phase(filters, fs, preamp=preamp_db, tilt=tilt_db)
+        fir = fir_from_peq_mixed_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=state['subsonic_freq'].get() if state['subsonic'].get() else None)
     else:
         state['status_var'].set("Unknown IR type selected.")
         return
-    
+
     filename = state['file_name'].get() or "IR"
-    out_path = Path(state['ir_save_dir'].get()) / f"{filename} {phase} {fs}Hz.wav"
+    out_path = Path(state['ir_save_dir'].get()) / f"{filename} T{tilt_db} {phase} {fs}Hz.wav"
     try:
         save_ir_to_wav(fir, str(out_path), fs)
         state['status_var'].set(f"Saved IR to {out_path}")
@@ -227,7 +275,57 @@ def export_ir(state):
             ir_export_dir=state['ir_save_dir'].get(),
             tilt=state['tilt'].get(),
             preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get()
+            subsonic=state['subsonic'].get(),
+            subsonic_freq=state['subsonic_freq'].get(),
+            link_ir=state['link_ir'].get(),
         )
+
+        # --- Копирование файла (жёсткая ссылка вместо символической), если включена галочка link_ir ---
+        if state.get('link_ir') and state['link_ir'].get():
+            link_dir = state.get('link_wav_dir').get() if state.get('link_wav_dir') else None
+            if link_dir:
+                link_name = f"{phase} {fs}Hz.wav"
+                link_path = Path(link_dir) / link_name
+                try:
+                    # Удаляем старый файл, если он есть
+                    if link_path.exists() or link_path.is_symlink():
+                        link_path.unlink()
+                    os.link(str(out_path), str(link_path))
+                    state['status_var'].set(state['status_var'].get() + f" | Жёсткая ссылка создана: {link_path}")
+                except Exception as e:
+                    state['status_var'].set(state['status_var'].get() + f" | Ошибка создания жёсткой ссылки: {e}")
     except Exception as e:
         state['status_var'].set(f"Error saving IR: {e}")
+
+def save_window_position(root):
+    try:
+        hwnd = root.winfo_id()
+        x, y, w, h = get_window_rect(hwnd)
+        save_config(window_x=x, window_y=y, window_width=w, window_height=h)
+    except Exception as e:
+        print(f"Error saving window position: {e}")
+
+def save_link_wav(state):
+    dir_path = filedialog.askdirectory(initialdir=state['link_wav_dir'].get())
+    if dir_path:
+        state['link_wav_dir'].set(str(dir_path))
+        # Обновляем текст link_path_label после выбора директории
+        if 'link_path_label' in state:
+            state['link_path_label'].config(text=truncate_middle(dir_path))
+        save_config(
+            last_file=state['current_file'].get(),
+            export_dir=state['save_dir'].get(),
+            last_file_name=state['file_name'].get(),
+            adjust_q=state['adjust_q'].get(),
+            ir_type=state['ir_type'].get(),
+            ir_fs=state['ir_fs'].get(),
+            ir_export_dir=state['ir_save_dir'].get(),
+            link_wav_dir=state['link_wav_dir'].get(),
+            tilt=state['tilt'].get(),
+            preamp=state['preamp'].get(),
+            subsonic=state['subsonic'].get(),
+            subsonic_freq=state['subsonic_freq'].get(),
+            link_ir=state['link_ir'].get(),
+        )
+        state['status_var'].set(f"Директория для WAV выбрана: {dir_path}")
+    
