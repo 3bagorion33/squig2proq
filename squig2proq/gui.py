@@ -40,6 +40,42 @@ def launch_gui():
     link_ir = tk.BooleanVar(value=config.get("link_ir", False))
     link_wav_dir = tk.StringVar(value=config.get("link_wav_dir", save_dir.get()))
 
+    # --- Восстановление множественного выбора fs и ir_type ---
+    fs_selected = config.get("fs_selected", [ir_fs.get()])
+    ir_type_selected = config.get("ir_type_selected", [ir_type.get()])
+
+    # --- Кастомный выпадающий список с чекбоксами ---
+    def create_multicheck_button(parent, options, var_list, label_text, width=16):
+        btn_var = tk.StringVar()
+        btn = ttk.Button(parent, text=label_text, width=width)
+        def update_btn_text():
+            selected = [opt for opt, v in zip(options, var_list) if v.get()]
+            btn_var.set(', '.join(map(str, selected)) if selected else label_text)
+            btn.config(text=btn_var.get())
+        def show_menu():
+            # Получаем координаты кнопки
+            bx = btn.winfo_rootx()
+            by = btn.winfo_rooty()
+            bh = btn.winfo_height()
+            # Создаём окно и позиционируем под кнопкой
+            top = tk.Toplevel(parent)
+            top.transient(parent)
+            top.grab_set()
+            top.title(label_text)
+            # Позиционирование: левый нижний угол кнопки
+            top.update_idletasks()
+            top.geometry(f'+{bx}+{by+bh}')
+            for i, opt in enumerate(options):
+                cb = ttk.Checkbutton(top, text=str(opt), variable=var_list[i], command=update_btn_text)
+                cb.pack(anchor='w', padx=10, pady=2)
+            def on_close():
+                update_btn_text()
+                top.destroy()
+            top.protocol('WM_DELETE_WINDOW', on_close)
+        btn.config(command=show_menu)
+        update_btn_text()
+        return btn
+
     # --- Виджеты ---
     status_label = ttk.Label(root, textvariable=status_var, anchor="w")
     status_label.pack(side=tk.BOTTOM, fill=tk.X)
@@ -83,10 +119,16 @@ def launch_gui():
     ir_export_btn.pack(side=tk.RIGHT)
     ir_dir_btn = ttk.Button(ir_frame, text="Dir for .wav", command=lambda: save_ir_wav(state))
     ir_dir_btn.pack(side=tk.RIGHT, padx=(5, 0))
-    fs_combo = ttk.Combobox(ir_frame, textvariable=ir_fs, values=fs_options, width=6, state="readonly")
-    fs_combo.pack(side=tk.RIGHT, padx=(0, 5))
-    ir_type_combo = ttk.Combobox(ir_frame, textvariable=ir_type, values=ir_type_options, width=16, state="readonly")
-    ir_type_combo.pack(side=tk.RIGHT, padx=(0, 5)) 
+
+    # --- Множественный выбор для fs_options ---
+    fs_var_list = [tk.BooleanVar(value=(fs in fs_selected)) for fs in fs_options]
+    fs_btn = create_multicheck_button(ir_frame, fs_options, fs_var_list, "Sample Rate", width=12)
+    fs_btn.pack(side=tk.RIGHT, padx=(0, 5))
+
+    # --- Множественный выбор для ir_type_options ---
+    ir_type_var_list = [tk.BooleanVar(value=(t in ir_type_selected)) for t in ir_type_options]
+    ir_type_btn = create_multicheck_button(ir_frame, ir_type_options, ir_type_var_list, "IR Type", width=16)
+    ir_type_btn.pack(side=tk.RIGHT, padx=(0, 5))
        
     link_frame = ttk.Frame(frame)
     link_frame.pack(pady=5, fill=tk.X)
@@ -143,7 +185,12 @@ def launch_gui():
         override_name=override_name,
         link_ir=link_ir,
         link_wav_dir=link_wav_dir,
-        link_path_label=link_path_label
+        link_path_label=link_path_label,
+        # --- добавлено для множественного экспорта ---
+        fs_var_list=fs_var_list,
+        fs_options=fs_options,
+        ir_type_var_list=ir_type_var_list,
+        ir_type_options=ir_type_options
     )
     
     # --- Привязки событий ---
@@ -156,6 +203,9 @@ def launch_gui():
     def on_close():
         from squig2proq.main import save_window_position, save_config
         save_window_position(root)
+        # --- Сохраняем выбранные значения fs и ir_type ---
+        fs_selected = [fs for fs, v in zip(fs_options, fs_var_list) if v.get()]
+        ir_type_selected = [t for t, v in zip(ir_type_options, ir_type_var_list) if v.get()]
         save_config(
             last_file=current_file.get(),
             last_file_name=file_name.get(),
@@ -163,13 +213,16 @@ def launch_gui():
             ir_export_dir=ir_save_dir.get(),
             adjust_q=adjust_q.get(),
             ir_type=ir_type.get(),
-            ir_fs=ir_fs.get(),            preamp=preamp.get(),
+            ir_fs=ir_fs.get(),
+            preamp=preamp.get(),
             tilt=tilt.get(),
             subsonic=subsonic.get(),
             subsonic_freq=subsonic_freq.get(),
             override_name=override_name.get(),
             link_wav_dir=link_wav_dir.get(),
-            link_ir=link_ir.get()
+            link_ir=link_ir.get(),
+            fs_selected=fs_selected,
+            ir_type_selected=ir_type_selected
         )
         root.destroy()
 

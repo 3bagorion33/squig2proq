@@ -55,6 +55,11 @@ def load_config():
                     config['window_y'] = None
                     config['window_width'] = None
                     config['window_height'] = None
+            # --- Добавляем значения по умолчанию для множественного выбора ---
+            if 'fs_selected' not in config:
+                config['fs_selected'] = [config.get('ir_fs', 48000)]
+            if 'ir_type_selected' not in config:
+                config['ir_type_selected'] = [config.get('ir_type', 'Linear Phase')]
             return config
         except Exception as e:
             print("Error reading config:", e)
@@ -71,7 +76,9 @@ def load_config():
         "window_width": None,
         "window_height": None,
         "link_ir": False,
-        "link_wav_dir": ""
+        "link_wav_dir": "",
+        "fs_selected": [48000],
+        "ir_type_selected": ["Linear Phase"]
     }
 
 def save_config(**kwargs):
@@ -245,57 +252,71 @@ def export_ir(state):
     if not filters:
         state['status_var'].set("No filters to export.")
         return
-    fs = state['ir_fs'].get()
+    # --- Получаем списки выбранных fs и ir_type, если есть ---
+    fs_list = None
+    ir_type_list = None
+    if 'fs_var_list' in state and 'fs_options' in state:
+        fs_list = [fs for fs, v in zip(state['fs_options'], state['fs_var_list']) if v.get()]
+    if 'ir_type_var_list' in state and 'ir_type_options' in state:
+        ir_type_list = [t for t, v in zip(state['ir_type_options'], state['ir_type_var_list']) if v.get()]
+    # Если списки не заданы, используем одиночные значения
+    if not fs_list:
+        fs_list = [state['ir_fs'].get()]
+    if not ir_type_list:
+        ir_type_list = [state['ir_type'].get()]
     length = 65536  # Используем четную длину для обоих типов фазы
-    phase = state['ir_type'].get()
     tilt_db = state['tilt'].get()
     preamp_db = state['preamp'].get()
-    if state['ir_type'].get() == "Minimum Phase":
-        fir = fir_from_peq_min_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=state['subsonic_freq'].get() if state['subsonic'].get() else None)
-    elif state['ir_type'].get() == "Linear Phase":
-        fir = fir_from_peq_linear_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=state['subsonic_freq'].get() if state['subsonic'].get() else None)
-    elif state['ir_type'].get() == "Mixed Phase":
-        fir = fir_from_peq_mixed_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=state['subsonic_freq'].get() if state['subsonic'].get() else None)
-    else:
-        state['status_var'].set("Unknown IR type selected.")
-        return
-
+    subsonic_val = state['subsonic_freq'].get() if state['subsonic'].get() else None
     filename = state['file_name'].get() or "IR"
-    out_path = Path(state['ir_save_dir'].get()) / f"{filename} T{tilt_db} {phase} {fs}Hz.wav"
-    try:
-        save_ir_to_wav(fir, str(out_path), fs)
-        state['status_var'].set(f"Saved IR to {out_path}")
-        save_config(
-            last_file=state['current_file'].get(),
-            export_dir=state['save_dir'].get(),
-            last_file_name=state['file_name'].get(),
-            adjust_q=state['adjust_q'].get(),
-            ir_type=state['ir_type'].get(),
-            ir_fs=state['ir_fs'].get(),
-            ir_export_dir=state['ir_save_dir'].get(),
-            tilt=state['tilt'].get(),
-            preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get(),
-            subsonic_freq=state['subsonic_freq'].get(),
-            link_ir=state['link_ir'].get(),
-        )
-
-        # --- Копирование файла (жёсткая ссылка вместо символической), если включена галочка link_ir ---
-        if state.get('link_ir') and state['link_ir'].get():
-            link_dir = state.get('link_wav_dir').get() if state.get('link_wav_dir') else None
-            if link_dir:
-                link_name = f"{phase} {fs}Hz.wav"
-                link_path = Path(link_dir) / link_name
-                try:
-                    # Удаляем старый файл, если он есть
-                    if link_path.exists() or link_path.is_symlink():
-                        link_path.unlink()
-                    os.link(str(out_path), str(link_path))
-                    state['status_var'].set(state['status_var'].get() + f" | Жёсткая ссылка создана: {link_path}")
-                except Exception as e:
-                    state['status_var'].set(state['status_var'].get() + f" | Ошибка создания жёсткой ссылки: {e}")
-    except Exception as e:
-        state['status_var'].set(f"Error saving IR: {e}")
+    ir_save_dir = Path(state['ir_save_dir'].get())
+    results = []
+    for phase in ir_type_list:
+        for fs in fs_list:
+            if phase == "Minimum Phase":
+                fir = fir_from_peq_min_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
+            elif phase == "Linear Phase":
+                fir = fir_from_peq_linear_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
+            elif phase == "Mixed Phase":
+                fir = fir_from_peq_mixed_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
+            else:
+                state['status_var'].set(f"Unknown IR type selected: {phase}.")
+                continue
+            out_path = ir_save_dir / f"{filename} T{tilt_db} {phase} {fs}Hz.wav"
+            try:
+                save_ir_to_wav(fir, str(out_path), fs)
+                results.append(f"Saved IR to {out_path}")
+                # --- Копирование файла (жёсткая ссылка вместо символической), если включена галочка link_ir ---
+                if state.get('link_ir') and state['link_ir'].get():
+                    link_dir = state.get('link_wav_dir').get() if state.get('link_wav_dir') else None
+                    if link_dir:
+                        link_name = f"{phase} {fs}Hz.wav"
+                        link_path = Path(link_dir) / link_name
+                        try:
+                            if link_path.exists() or link_path.is_symlink():
+                                link_path.unlink()
+                            os.link(str(out_path), str(link_path))
+                            results[-1] += f" | Жёсткая ссылка создана: {link_path}"
+                        except Exception as e:
+                            results[-1] += f" | Ошибка создания жёсткой ссылки: {e}"
+            except Exception as e:
+                results.append(f"Error saving IR: {e}")
+    # Сохраняем конфиг после всех экспортов
+    save_config(
+        last_file=state['current_file'].get(),
+        export_dir=state['save_dir'].get(),
+        last_file_name=state['file_name'].get(),
+        adjust_q=state['adjust_q'].get(),
+        ir_type=state['ir_type'].get(),
+        ir_fs=state['ir_fs'].get(),
+        ir_export_dir=state['ir_save_dir'].get(),
+        tilt=state['tilt'].get(),
+        preamp=state['preamp'].get(),
+        subsonic=state['subsonic'].get(),
+        subsonic_freq=state['subsonic_freq'].get(),
+        link_ir=state['link_ir'].get(),
+    )
+    state['status_var'].set("; ".join(results))
 
 def save_window_position(root):
     try:
@@ -328,4 +349,3 @@ def save_link_wav(state):
             link_ir=state['link_ir'].get(),
         )
         state['status_var'].set(f"Директория для WAV выбрана: {dir_path}")
-    
