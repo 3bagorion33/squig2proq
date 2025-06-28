@@ -48,6 +48,29 @@ def _rbj_high_shelf_coeffs(f0, Q, gain_db, fs):
     return b, a
 
 
+def _rbj_low_shelf_coeffs(f0, Q, gain_db, fs):
+    """
+    Вычисляет коэффициенты RBJ low shelf biquad-фильтра.
+    Возвращает (b, a) для lfilter.
+    """
+    A = 10 ** (gain_db / 40)
+    w0 = 2 * np.pi * f0 / fs
+    alpha = np.sin(w0) / (2 * Q)
+    cos_w0 = np.cos(w0)
+    sqrtA = np.sqrt(A)
+
+    b0 =    A*((A+1)-(A-1)*cos_w0+2*sqrtA*alpha)
+    b1 =  2*A*((A-1)-(A+1)*cos_w0)
+    b2 =    A*((A+1)-(A-1)*cos_w0-2*sqrtA*alpha)
+    a0 =       (A+1)+(A-1)*cos_w0+2*sqrtA*alpha
+    a1 = -2*((A-1)+(A+1)*cos_w0)
+    a2 =      (A+1)+(A-1)*cos_w0-2*sqrtA*alpha
+
+    b = np.array([b0, b1, b2]) / a0
+    a = np.array([1, a1 / a0, a2 / a0])
+    return b, a
+
+
 def _rbj_bessel_lpf_coeffs(f0, fs):
     """
     Вычисляет коэффициенты RBJ для Бесселя LPF первого порядка.
@@ -120,10 +143,16 @@ def fir_from_peq_min_phase(
     impulse[0] = 10 ** (preamp / 20)
     out = impulse.copy()
     for f in filters:
-        if f.get('Type', 'PK') == 'HSC':
-            b, a = _rbj_high_shelf_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
-        else:
-            b, a = _rbj_peaking_eq_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+        filter_type = f.get('Type', 'PK')
+        match filter_type:
+            case 'HSC':
+                b, a = _rbj_high_shelf_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+            case 'LSC':
+                b, a = _rbj_low_shelf_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+            case 'PK':
+                b, a = _rbj_peaking_eq_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+            case _:
+                raise ValueError(f"Неизвестный тип фильтра: {filter_type}")
         out = lfilter(b, a, out)
     if subsonic is not None:
         b, a = _rbj_bessel_hpf_coeffs(subsonic, fs)
@@ -145,7 +174,7 @@ def fir_from_peq_min_phase(
         # Применяем наклон к спектру
         X *= tilt_factor
         
-        # Преобразуем обратно во временную область через обратное ДКП
+        # Преобразуем обратно во времную область через обратное ДКП
         out = idct(X, type=2, norm='ortho')
  
     if fade:
@@ -183,8 +212,16 @@ def fir_from_peq_linear_phase(
 
     # ---------- складываем PEQ ----------
     for f in filters:
-        b, a = (_rbj_high_shelf_coeffs if f.get('Type','PK')=='HSC'
-                else _rbj_peaking_eq_coeffs)(f['Frequency'], f['Q'], f['Gain'], fs)
+        filter_type = f.get('Type', 'PK')
+        match filter_type:
+            case 'HSC':
+                b, a = _rbj_high_shelf_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+            case 'LSC':
+                b, a = _rbj_low_shelf_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+            case 'PK':
+                b, a = _rbj_peaking_eq_coeffs(f['Frequency'], f['Q'], f['Gain'], fs)
+            case _:
+                raise ValueError(f"Неизвестный тип фильтра: {filter_type}")
         h_total *= freqz(b, a, worN=w)[1]
     if subsonic is not None:
         b, a = _rbj_bessel_hpf_coeffs(subsonic, fs)

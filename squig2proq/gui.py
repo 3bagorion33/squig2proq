@@ -152,7 +152,7 @@ def launch_gui():
     preamp_spinbox.pack(side=tk.LEFT, padx=(0, 5))
     tilt_label = ttk.Label(param_frame, text="Tilt (dB):")
     tilt_label.pack(side=tk.LEFT, padx=(0, 0))
-    tilt_spinbox = tk.Spinbox(param_frame, textvariable=tilt, from_=-12.0, to=12.0, increment=0.1, width=6, format="%.1f")
+    tilt_spinbox = tk.Spinbox(param_frame, textvariable=tilt, from_=-12.0, to=12.0, increment=0.05, width=6, format="%.2f")
     tilt_spinbox.pack(side=tk.LEFT, padx=(0, 5))
     subsonic_freq_spinbox = tk.Spinbox(param_frame, textvariable=subsonic_freq, from_=1.0, to=20.0, increment=0.5, width=6, format="%.1f")
     subsonic_freq_spinbox.pack(side=tk.RIGHT, padx=(5, 0))

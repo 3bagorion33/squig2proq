@@ -248,6 +248,18 @@ def export_ir(state):
     from squig2proq.ir_utils import fir_from_peq_linear_phase, fir_from_peq_min_phase, save_ir_to_wav
     from squig2proq.ir_utils import fir_from_peq_mixed_phase
     import os
+    # --- Перечитываем файл фильтра перед экспортом IR ---
+    current_file = state.get('current_file').get() if 'current_file' in state and state['current_file'].get() else None
+    if current_file:
+        try:
+            with open(current_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            filters, preamp_val = parse_filter_text(content)
+            state['filters'] = filters
+            # Не меняем preamp, если он уже установлен вручную
+        except Exception as e:
+            state['status_var'].set(f"Ошибка при перечитывании файла фильтра: {e}")
+            return
     filters = state.get('filters', [])
     if not filters:
         state['status_var'].set("No filters to export.")
