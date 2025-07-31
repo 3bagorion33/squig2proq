@@ -4,13 +4,15 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 from pathlib import Path
 import importlib.resources as pkg_resources
 import importlib.resources
-from squig2proq import data
-from squig2proq.parser import parse_filter_text, build_ffp, truncate_middle
 import os
 import ctypes.wintypes
 import json
 import sys
 import ctypes
+from squig2proq import data
+from squig2proq.parser import parse_filter_text, build_ffp, truncate_middle
+from squig2proq.ir_utils import fir_from_peq_linear_phase, fir_from_peq_min_phase, save_ir_to_wav, fir_from_peq_mixed_phase
+import numpy as np
 
 def get_window_rect(hwnd):
     # Получить глобальные координаты окна через WinAPI
@@ -57,9 +59,14 @@ def load_config():
                     config['window_height'] = None
             # --- Добавляем значения по умолчанию для множественного выбора ---
             if 'fs_selected' not in config:
-                config['fs_selected'] = [config.get('ir_fs', 48000)]
+                config['fs_selected'] = [48000]
             if 'ir_type_selected' not in config:
-                config['ir_type_selected'] = [config.get('ir_type', 'Linear Phase')]
+                config['ir_type_selected'] = ['Linear Phase']
+            # --- Добавляем значения по умолчанию для Curve Designer ---
+            if 'txt_file_name' not in config:
+                config['txt_file_name'] = "MyFilter.txt"
+            if 'txt_save_dir' not in config:
+                config['txt_save_dir'] = str(Path.home())
             return config
         except Exception as e:
             print("Error reading config:", e)
@@ -68,28 +75,60 @@ def load_config():
         "export_dir": "",
         "last_file_name": "",
         "adjust_q": False,
-        "ir_type": "Linear Phase",
-        "ir_fs": 48000,
         "ir_export_dir": "",
-        "window_x": None,        
+        "window_x": None,
         "window_y": None,
         "window_width": None,
         "window_height": None,
         "link_ir": False,
         "link_wav_dir": "",
         "fs_selected": [48000],
-        "ir_type_selected": ["Linear Phase"]
+        "ir_type_selected": ["Linear Phase"],
+        "txt_file_name": "MyFilter.txt",
+        "txt_save_dir": str(Path.home())
     }
 
-def save_config(**kwargs):
+def save_config(state):
+    """
+    Сохраняет все основные переменные из state в config.json.
+    """
     CONFIG_DIR = Path.home() / ".squig2proq"
     CONFIG_PATH = CONFIG_DIR / "config.json"
     config = load_config()
-    config.update(kwargs)
+    # Сохраняем все ключевые переменные из state
+    def get_val(key, default=None):
+        v = state.get(key)
+        if hasattr(v, 'get'):
+            return v.get()
+        return v if v is not None else default
+
+    config.update({
+        "last_file": get_val("current_file", ""),
+        "export_dir": get_val("save_dir", ""),
+        "last_file_name": get_val("file_name", "Parsed_Filter"),
+        "adjust_q": get_val("adjust_q", False),
+        "ir_export_dir": get_val("ir_save_dir", ""),
+        "tilt": get_val("tilt", 0.0),
+        "preamp": get_val("preamp", 0.0),
+        "subsonic": get_val("subsonic", True),
+        "subsonic_freq": get_val("subsonic_freq", 10.0),
+        "override_name": get_val("override_name", False),
+        "link_wav_dir": get_val("link_wav_dir", ""),
+        "link_ir": get_val("link_ir", False),
+        "fs_selected": [fs for fs, v in zip(get_val("fs_options", []), get_val("fs_var_list", [])) if hasattr(v, 'get') and v.get()] if get_val("fs_options") and get_val("fs_var_list") else config.get("fs_selected", [48000]),
+        "ir_type_selected": [t for t, v in zip(get_val("ir_type_options", []), get_val("ir_type_var_list", [])) if hasattr(v, 'get') and v.get()] if get_val("ir_type_options") and get_val("ir_type_var_list") else config.get("ir_type_selected", ["Linear Phase"]),
+        "window_x": config.get("window_x"),
+        "window_y": config.get("window_y"),
+        "window_width": config.get("window_width"),
+        "window_height": config.get("window_height"),
+        # --- Для Curve Designer ---
+        "txt_file_name": get_val("txt_file_name", "MyFilter.txt"),
+        "txt_save_dir": get_val("txt_save_dir", str(Path.home())),
+    })
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(config, f)
+            json.dump(config, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print("Error saving config:", e)
 
@@ -110,8 +149,9 @@ def load_from_path(path, update_file_name, state):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
-        filters, preamp_val = parse_filter_text(content)
+        filters, preamp_val, fs_base = parse_filter_text(content)
         state['filters'] = filters
+        state['fs_base'].set(fs_base if fs_base is not None else 48000)
         if state['preamp'].get() == 0.0:
             state['preamp'].set(preamp_val)
         for row in state['tree'].get_children():
@@ -125,13 +165,8 @@ def load_from_path(path, update_file_name, state):
         if state['override_name'].get():
             file_name = Path(path).stem
             state['file_name'].set(file_name)
-
-        save_config(
-            last_file=state['current_file'].get(),
-            last_file_name=state['file_name'].get(),
-            preamp=state['preamp'].get(),
-            link_ir=state['link_ir'].get(),
-        )
+        if update_file_name:
+            save_config(state)
     except Exception as e:
         state['status_var'].set(f"Error loading file: {e}")
 
@@ -148,20 +183,7 @@ def choose_file(state):
     if dir_path:
         state['save_dir'].set(str(dir_path))
         state['path_label'].config(text=truncate_middle(dir_path))
-        save_config(
-            last_file=state['current_file'].get(),
-            export_dir=state['save_dir'].get(),
-            last_file_name=state['file_name'].get(),
-            adjust_q=state['adjust_q'].get(),
-            ir_type=state['ir_type'].get(),
-            ir_fs=state['ir_fs'].get(),
-            ir_export_dir=state['ir_save_dir'].get(),
-            tilt=state['tilt'].get(),
-            preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get(),
-            subsonic_freq=state['subsonic_freq'].get(),
-            link_ir=state['link_ir'].get(),
-        )
+        save_config(state)
 
 def export_ffp(state):
     filters = state.get('filters', [])
@@ -195,20 +217,7 @@ def export_ffp(state):
         with open(output_path, 'w', encoding='utf-8') as f:
             f.writelines(result)
         state['status_var'].set(f"Saved to {output_path}")
-        save_config(
-            last_file=state['current_file'].get(),
-            export_dir=state['save_dir'].get(),
-            last_file_name=state['file_name'].get(),
-            adjust_q=state['adjust_q'].get(),
-            ir_type=state['ir_type'].get(),
-            ir_fs=state['ir_fs'].get(),
-            ir_export_dir=state['ir_save_dir'].get(),
-            tilt=state['tilt'].get(),
-            preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get(),
-            subsonic_freq=state['subsonic_freq'].get(),
-            link_ir=state['link_ir'].get(),
-        )
+        save_config(state)
     except Exception as e:
         state['status_var'].set(f"Error saving file: {e}")
 
@@ -233,8 +242,6 @@ def save_ir_wav(state):
             export_dir=state['save_dir'].get(),
             last_file_name=state['file_name'].get(),
             adjust_q=state['adjust_q'].get(),
-            ir_type=state['ir_type'].get(),
-            ir_fs=state['ir_fs'].get(),
             ir_export_dir=state['ir_save_dir'].get(),
             tilt=state['tilt'].get(),
             preamp=state['preamp'].get(),
@@ -245,9 +252,6 @@ def save_ir_wav(state):
         state['status_var'].set(f"Директория для IR выбрана: {dir_path}")
 
 def export_ir(state):
-    from squig2proq.ir_utils import fir_from_peq_linear_phase, fir_from_peq_min_phase, save_ir_to_wav
-    from squig2proq.ir_utils import fir_from_peq_mixed_phase
-    import os
     # --- Перечитываем файл фильтра перед экспортом IR ---
     current_file = state.get('current_file').get() if 'current_file' in state and state['current_file'].get() else None
     if current_file:
@@ -271,11 +275,7 @@ def export_ir(state):
         fs_list = [fs for fs, v in zip(state['fs_options'], state['fs_var_list']) if v.get()]
     if 'ir_type_var_list' in state and 'ir_type_options' in state:
         ir_type_list = [t for t, v in zip(state['ir_type_options'], state['ir_type_var_list']) if v.get()]
-    # Если списки не заданы, используем одиночные значения
-    if not fs_list:
-        fs_list = [state['ir_fs'].get()]
-    if not ir_type_list:
-        ir_type_list = [state['ir_type'].get()]
+
     length = 65536  # Используем четную длину для обоих типов фазы
     tilt_db = state['tilt'].get()
     preamp_db = state['preamp'].get()
@@ -314,27 +314,23 @@ def export_ir(state):
             except Exception as e:
                 results.append(f"Error saving IR: {e}")
     # Сохраняем конфиг после всех экспортов
-    save_config(
-        last_file=state['current_file'].get(),
-        export_dir=state['save_dir'].get(),
-        last_file_name=state['file_name'].get(),
-        adjust_q=state['adjust_q'].get(),
-        ir_type=state['ir_type'].get(),
-        ir_fs=state['ir_fs'].get(),
-        ir_export_dir=state['ir_save_dir'].get(),
-        tilt=state['tilt'].get(),
-        preamp=state['preamp'].get(),
-        subsonic=state['subsonic'].get(),
-        subsonic_freq=state['subsonic_freq'].get(),
-        link_ir=state['link_ir'].get(),
-    )
+    save_config(state)
     state['status_var'].set("; ".join(results))
 
 def save_window_position(root):
     try:
         hwnd = root.winfo_id()
         x, y, w, h = get_window_rect(hwnd)
-        save_config(window_x=x, window_y=y, window_width=w, window_height=h)
+        # Получаем state только из root, не создаём временный
+        state = getattr(root, 'state', None)
+        if state is not None:
+            state['window_x'] = x
+            state['window_y'] = y
+            state['window_width'] = w
+            state['window_height'] = h
+            save_config(state)
+        else:
+            print("Error saving window position: state not found in root")
     except Exception as e:
         print(f"Error saving window position: {e}")
 
@@ -345,19 +341,5 @@ def save_link_wav(state):
         # Обновляем текст link_path_label после выбора директории
         if 'link_path_label' in state:
             state['link_path_label'].config(text=truncate_middle(dir_path))
-        save_config(
-            last_file=state['current_file'].get(),
-            export_dir=state['save_dir'].get(),
-            last_file_name=state['file_name'].get(),
-            adjust_q=state['adjust_q'].get(),
-            ir_type=state['ir_type'].get(),
-            ir_fs=state['ir_fs'].get(),
-            ir_export_dir=state['ir_save_dir'].get(),
-            link_wav_dir=state['link_wav_dir'].get(),
-            tilt=state['tilt'].get(),
-            preamp=state['preamp'].get(),
-            subsonic=state['subsonic'].get(),
-            subsonic_freq=state['subsonic_freq'].get(),
-            link_ir=state['link_ir'].get(),
-        )
+        save_config(state)
         state['status_var'].set(f"Директория для WAV выбрана: {dir_path}")

@@ -4,10 +4,17 @@ import math
 def parse_filter_text(content):
     filters = []
     preamp = 0.0
+    fs_base = None
     for line in content.splitlines():
         preamp_match = re.match(r'Preamp: ([\-\d.]+) dB', line)
         if preamp_match:
             preamp = float(preamp_match.group(1))
+        
+        # Поиск базовой частоты семплирования
+        fs_match = re.match(r'#?\s*FS:\s*(\d+)', line)
+        if fs_match:
+            fs_base = int(fs_match.group(1))
+            
         match = re.match(r'Filter\s?(\d*): ON (\w+) Fc (\d+) Hz Gain ([\-\d.]+) dB Q ([\d.]+)', line)
         if match:
             filters.append({
@@ -16,7 +23,7 @@ def parse_filter_text(content):
                 'Gain': float(match.group(4)),
                 'Q': float(match.group(5)),
             })
-    return filters, preamp
+    return filters, preamp, fs_base
 
 def build_ffp(filters, template_text, adjust_q=False, preamp=0.0):
     template_lines = template_text.splitlines(keepends=True)

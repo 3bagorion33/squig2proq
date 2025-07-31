@@ -5,10 +5,14 @@ from pathlib import Path
 from squig2proq.parser import truncate_middle
 from squig2proq.main import (
     load_config, save_config, get_default_install_path,
-    load_from_path, load_file, choose_file, export_ffp, on_drop, save_ir_wav, save_link_wav, export_ir
+    load_from_path, load_file, choose_file, export_ffp, on_drop, save_ir_wav, save_link_wav, export_ir,
+    save_window_position, save_config,
 )
+# --- Импорты для интерфейса ---
+import tkinter as tk
 
 def launch_gui():
+
     root = TkinterDnD.Tk()
     root.title("Squig2ProQ")
 
@@ -21,6 +25,16 @@ def launch_gui():
         except Exception:
             pass
 
+    # --- Notebook (вкладки) ---
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill=tk.BOTH, expand=True)
+
+
+    # --- Первая вкладка ---
+    tab1 = ttk.Frame(notebook)
+    notebook.add(tab1, text="Filters")
+
+
     # --- Переменные состояния ---
     status_var = tk.StringVar(value="Ready")
     current_file = tk.StringVar(value=config.get("last_file", ""))
@@ -29,9 +43,8 @@ def launch_gui():
     save_dir = tk.StringVar(value=default_path)
     adjust_q = tk.BooleanVar(value=config.get("adjust_q", False))
     ir_type_options = ["Linear Phase", "Minimum Phase", "Mixed Phase"]
-    ir_type = tk.StringVar(value=config.get("ir_type", ir_type_options[0]))
     fs_options = [44100, 48000, 88200, 96000, 176400, 192000]
-    ir_fs = tk.IntVar(value=int(config.get("ir_fs", 48000)))
+    fs_base = tk.IntVar(value=config.get("fs_base", 48000))
     preamp = tk.DoubleVar(value=config.get("preamp", 0.0))
     tilt = tk.DoubleVar(value=config.get("tilt", 0.0))
     subsonic = tk.BooleanVar(value=config.get("subsonic", True))    
@@ -39,10 +52,8 @@ def launch_gui():
     ir_save_dir = tk.StringVar(value=config.get("ir_export_dir", save_dir.get()))
     link_ir = tk.BooleanVar(value=config.get("link_ir", False))
     link_wav_dir = tk.StringVar(value=config.get("link_wav_dir", save_dir.get()))
-
-    # --- Восстановление множественного выбора fs и ir_type ---
-    fs_selected = config.get("fs_selected", [ir_fs.get()])
-    ir_type_selected = config.get("ir_type_selected", [ir_type.get()])
+    fs_selected = config.get("fs_selected", [48000])
+    ir_type_selected = config.get("ir_type_selected", ["Linear Phase"])
 
     # --- Кастомный выпадающий список с чекбоксами ---
     def create_multicheck_button(parent, options, var_list, label_text, width=16):
@@ -53,16 +64,13 @@ def launch_gui():
             btn_var.set(', '.join(map(str, selected)) if selected else label_text)
             btn.config(text=btn_var.get())
         def show_menu():
-            # Получаем координаты кнопки
             bx = btn.winfo_rootx()
             by = btn.winfo_rooty()
             bh = btn.winfo_height()
-            # Создаём окно и позиционируем под кнопкой
             top = tk.Toplevel(parent)
             top.transient(parent)
             top.grab_set()
             top.title(label_text)
-            # Позиционирование: левый нижний угол кнопки
             top.update_idletasks()
             top.geometry(f'+{bx}+{by+bh}')
             for i, opt in enumerate(options):
@@ -80,7 +88,7 @@ def launch_gui():
     status_label = ttk.Label(root, textvariable=status_var, anchor="w")
     status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-    frame = ttk.Frame(root, padding=10)
+    frame = ttk.Frame(tab1, padding=10)
     frame.pack(fill=tk.BOTH, expand=True)
 
     load_frame = ttk.Frame(frame)
@@ -146,7 +154,12 @@ def launch_gui():
 
     param_frame = ttk.Frame(frame)
     param_frame.pack(pady=2, fill=tk.X)
-    preamp_label = ttk.Label(param_frame, text="Preamp (dB):")
+    fs_base_label = ttk.Label(param_frame, text="Base Sample Rate:" )
+    fs_base_label.pack(side=tk.LEFT, padx=(0, 0))
+    fs_base_entry = ttk.Entry(param_frame, textvariable=fs_base, width=10)
+    fs_base_entry.pack(side=tk.LEFT, fill=tk.X, expand=False, padx=(0, 5))
+
+    preamp_label = ttk.Label(param_frame, text="Preamp (dB):" )
     preamp_label.pack(side=tk.LEFT, padx=(0, 0))
     preamp_spinbox = tk.Spinbox(param_frame, textvariable=preamp, from_=-24.0, to=24.0, increment=0.1, width=6, format="%.1f")
     preamp_spinbox.pack(side=tk.LEFT, padx=(0, 5))
@@ -164,7 +177,9 @@ def launch_gui():
     for col in columns:
         tree.heading(col, text=col)
         tree.column(col, anchor='center')
-    tree.pack(fill=tk.BOTH, expand=True)    # --- Словарь состояния для передачи в main.py ---
+    tree.pack(fill=tk.BOTH, expand=True)
+
+    # --- Словарь состояния для передачи в main.py ---
     state = dict(
         root=root,
         status_var=status_var,
@@ -172,13 +187,12 @@ def launch_gui():
         file_name=file_name,
         save_dir=save_dir,
         adjust_q=adjust_q,
-        ir_type=ir_type,
-        ir_fs=ir_fs,
         preamp=preamp,
         tilt=tilt,
         subsonic=subsonic,
         subsonic_freq=subsonic_freq,
         ir_save_dir=ir_save_dir,
+        fs_base=fs_base,
         tree=tree,
         path_label=path_label,
         ir_path_label=ir_path_label,
@@ -190,9 +204,11 @@ def launch_gui():
         fs_var_list=fs_var_list,
         fs_options=fs_options,
         ir_type_var_list=ir_type_var_list,
-        ir_type_options=ir_type_options
+        ir_type_options=ir_type_options,
     )
-    
+    # Делаем state доступным из root для save_window_position
+    root.state = state
+
     # --- Привязки событий ---
     path_label.bind('<Configure>', lambda e: path_label.config(text=truncate_middle(save_dir.get(), path_label.winfo_width() // 7)))
     ir_path_label.bind('<Configure>', lambda e: ir_path_label.config(text=truncate_middle(ir_save_dir.get(), ir_path_label.winfo_width() // 7)))
@@ -201,29 +217,8 @@ def launch_gui():
     root.dnd_bind('<<Drop>>', lambda event: on_drop(event, state))
 
     def on_close():
-        from squig2proq.main import save_window_position, save_config
         save_window_position(root)
-        # --- Сохраняем выбранные значения fs и ir_type ---
-        fs_selected = [fs for fs, v in zip(fs_options, fs_var_list) if v.get()]
-        ir_type_selected = [t for t, v in zip(ir_type_options, ir_type_var_list) if v.get()]
-        save_config(
-            last_file=current_file.get(),
-            last_file_name=file_name.get(),
-            export_dir=save_dir.get(),
-            ir_export_dir=ir_save_dir.get(),
-            adjust_q=adjust_q.get(),
-            ir_type=ir_type.get(),
-            ir_fs=ir_fs.get(),
-            preamp=preamp.get(),
-            tilt=tilt.get(),
-            subsonic=subsonic.get(),
-            subsonic_freq=subsonic_freq.get(),
-            override_name=override_name.get(),
-            link_wav_dir=link_wav_dir.get(),
-            link_ir=link_ir.get(),
-            fs_selected=fs_selected,
-            ir_type_selected=ir_type_selected
-        )
+        save_config(state)
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
