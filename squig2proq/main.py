@@ -1,18 +1,13 @@
 import tkinter as tk
-from tkinter import filedialog, ttk
-from tkinterdnd2 import DND_FILES, TkinterDnD
+from tkinter import filedialog
 from pathlib import Path
-import importlib.resources as pkg_resources
-import importlib.resources
 import os
 import ctypes.wintypes
 import json
 import sys
 import ctypes
-from squig2proq import data
 from squig2proq.parser import parse_filter_text, build_ffp, truncate_middle
-from squig2proq.ir_utils import fir_from_peq_linear_phase, fir_from_peq_min_phase, save_ir_to_wav, fir_from_peq_mixed_phase
-import numpy as np
+from squig2proq.ir_utils import IRCreator, save_ir_to_wav#, fir_from_peq_linear_phase, fir_from_peq_mixed_phase
 
 def get_window_rect(hwnd):
     # Получить глобальные координаты окна через WinAPI
@@ -258,7 +253,7 @@ def export_ir(state):
         try:
             with open(current_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            filters, preamp_val = parse_filter_text(content)
+            filters, _, _ = parse_filter_text(content)
             state['filters'] = filters
             # Не меняем preamp, если он уже установлен вручную
         except Exception as e:
@@ -283,14 +278,16 @@ def export_ir(state):
     filename = state['file_name'].get() or "IR"
     ir_save_dir = Path(state['ir_save_dir'].get())
     results = []
+    ircreator = IRCreator(filters, preamp=preamp_db, fs_base=state['fs_base'].get(), subsonic=subsonic_val, tilt=tilt_db)
     for phase in ir_type_list:
         for fs in fs_list:
             if phase == "Minimum Phase":
-                fir = fir_from_peq_min_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
+                fir = ircreator.min_phase(fs, length, fade=True)
             elif phase == "Linear Phase":
-                fir = fir_from_peq_linear_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
+                fir = ircreator.lin_phase(fs, length, fade=True)
+                #fir = fir_from_peq_linear_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
             elif phase == "Mixed Phase":
-                fir = fir_from_peq_mixed_phase(filters, fs, length, preamp=preamp_db, tilt=tilt_db, fade=True, subsonic=subsonic_val)
+                fir = ircreator.mix_phase(fs, length, fade=True)
             else:
                 state['status_var'].set(f"Unknown IR type selected: {phase}.")
                 continue
