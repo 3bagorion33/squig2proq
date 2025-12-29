@@ -412,6 +412,7 @@ class IRCreator:
         fs: int,
         length: int,
         fade: bool = False,
+        mix_ratio: int = 16,
     ) -> np.ndarray:
         """
         Создает импульсную характеристику со смешанной фазой: 
@@ -425,13 +426,15 @@ class IRCreator:
             Длина выходной ИХ
         fade : bool, optional
             Применить затухание в конце ИХ
+        mix_ratio : int, optional
+            соотношение HF как 1/mix_ratio
 
         Returns
         -------
         np.ndarray
             Импульсная характеристика со смешанной фазой
         """
-        hp_len = length // 16
+        hp_len = length // mix_ratio
         lp_len = length
 
         # Получаем ИХ для НЧ (минимальная фаза) и ВЧ (линейная фаза) частей

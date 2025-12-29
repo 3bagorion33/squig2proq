@@ -11,7 +11,7 @@
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
     <LaunchProvider>Standard Python launcher</LaunchProvider>
-    <InterpreterId />
+    <InterpreterId>MSBuild|venv|$(MSBuildProjectFullPath)</InterpreterId>
     <IsWindowsApplication>True</IsWindowsApplication>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
@@ -20,48 +20,35 @@
     <VisualStudioVersion Condition=" '$(VisualStudioVersion)' == '' ">10.0</VisualStudioVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="build\lib\proq_parser\data\__init__.py" />
-    <Compile Include="build\lib\proq_parser\gui.py" />
-    <Compile Include="build\lib\proq_parser\parser.py" />
-    <Compile Include="build\lib\proq_parser\__init__.py" />
-    <Compile Include="build\lib\squig2proq\data\__init__.py" />
-    <Compile Include="build\lib\squig2proq\gui.py" />
-    <Compile Include="build\lib\squig2proq\parser.py" />
-    <Compile Include="build\lib\squig2proq\__init__.py" />
     <Compile Include="setup.py" />
     <Compile Include="squig2proq\data\__init__.py" />
     <Compile Include="squig2proq\gui.py" />
     <Compile Include="squig2proq\ir_utils.py" />
-    <Compile Include="squig2proq\main.py" />
     <Compile Include="squig2proq\parser.py" />
     <Compile Include="squig2proq\__init__.py" />
+    <Compile Include="squig2proq\__main__.py" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="build\gui\warn-gui.txt" />
-    <Content Include="build\gui\xref-gui.html" />
-    <Content Include="build\squig2proq\warn-squig2proq.txt" />
-    <Content Include="build\squig2proq\xref-squig2proq.html" />
-    <Content Include="build\__init__\warn-__init__.txt" />
-    <Content Include="build\__init__\xref-__init__.html" />
-    <Content Include="squig2proq.egg-info\dependency_links.txt" />
-    <Content Include="squig2proq.egg-info\entry_points.txt" />
-    <Content Include="squig2proq.egg-info\requires.txt" />
-    <Content Include="squig2proq.egg-info\SOURCES.txt" />
-    <Content Include="squig2proq.egg-info\top_level.txt" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="build\" />
-    <Folder Include="build\gui" />
-    <Folder Include="build\lib\" />
-    <Folder Include="build\lib\proq_parser" />
-    <Folder Include="build\lib\proq_parser\data" />
-    <Folder Include="build\lib\squig2proq" />
-    <Folder Include="build\lib\squig2proq\data" />
-    <Folder Include="build\squig2proq" />
-    <Folder Include="build\__init__" />
+    <Folder Include=".github\" />
+    <Folder Include=".github\workflows\" />
     <Folder Include="squig2proq" />
-    <Folder Include="squig2proq.egg-info" />
     <Folder Include="squig2proq\data" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include=".github\workflows\build_exe.yml" />
+    <Content Include="README.md" />
+    <Content Include="requirements.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Interpreter Include="venv\">
+      <Id>venv</Id>
+      <Version>3.10</Version>
+      <Description>venv (Python 3.10 (64-bit))</Description>
+      <InterpreterPath>Scripts\python.exe</InterpreterPath>
+      <WindowsInterpreterPath>Scripts\pythonw.exe</WindowsInterpreterPath>
+      <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
+      <Architecture>X64</Architecture>
+    </Interpreter>
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
 </Project>

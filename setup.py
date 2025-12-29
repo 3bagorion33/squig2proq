@@ -5,15 +5,18 @@ setup(
     version='1.0',
     packages=find_packages(),
     package_data={
-        'squig2proq.data': ['Clean.ffp'],
+        'squig2proq': ['data/Clean.ffp'],
     },
     include_package_data=True,
     install_requires=[
-        'tkinterdnd2',
+        'PyQt6',
+        'numpy',
+        'scipy',
     ],
+    python_requires='>=3.10',
     entry_points={
         'console_scripts': [
-            'squig2proq=squig2proq:main',
+            'squig2proq=squig2proq.main:main',
         ],
     },
 )

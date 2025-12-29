@@ -56,9 +56,3 @@ def build_ffp(filters, template_text, adjust_q=False, preamp=0.0):
             updated_lines.append(line)
 
     return updated_lines
-
-def truncate_middle(path, max_length=50):
-    if len(path) <= max_length:
-        return path
-    part_length = (max_length - 3) // 2
-    return path[:part_length] + '...' + path[-part_length:]

@@ -17,8 +17,10 @@ env/
 
 # PyInstaller
 *.spec
-build/
-dist/
+*.build/
+*.dist/
+*.exe
+
 
 # Installer logs
 pip-log.txt
