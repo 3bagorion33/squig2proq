@@ -33,7 +33,7 @@ jobs:
     # 4. Компиляция (Ваша команда)
     - name: Build with Nuitka
       run: |
-        python -m nuitka --onefile --assume-yes-for-downloads --enable-plugin=pyqt6 --windows-console-mode=disable --include-data-dir=squig2proq\data=data squig2proq
+        python -m nuitka --onefile --assume-yes-for-downloads --enable-plugin=pyqt6 --windows-console-mode=disable --include-data-files=squig2proq\gui.ui=gui.ui --include-data-dir=squig2proq\data=data squig2proq
 
     # 5. Сохраняем результат (Upload Artifact)
     # Этот шаг найдет все .exe файлы в корне и загрузит их в артефакты сборки
