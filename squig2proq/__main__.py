@@ -7,13 +7,20 @@ import ctypes
 # Импорты QT
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QFileDialog, QMessageBox, 
                              QTreeWidgetItem, QMenu, QWidgetAction, QCheckBox, 
-                             QLabel, QSizePolicy, QHBoxLayout, QSpinBox, QWidget)
+                             QLabel, QSizePolicy, QHBoxLayout, QVBoxLayout, QSpinBox, QWidget)
 from PyQt6.QtGui import QPainter, QGuiApplication
 from PyQt6.QtCore import Qt, QSize
 
-# Импорт вашего скомпилированного дизайна
-# Убедитесь, что __init__.py отработал и gui.py существует
-from squig2proq.gui import Ui_MainWindow 
+# Загружаем дизайн из .ui в рантайме (не требуется предварительная компиляция)
+from PyQt6 import uic
+from squig2proq.plot_qt import PlotWidget
+
+# Импорт аудио менеджера
+try:
+    from squig2proq.audio import AudioManager, SOUNDDEVICE_AVAILABLE
+except ImportError:
+    AudioManager = None
+    SOUNDDEVICE_AVAILABLE = False
 
 # Ваши библиотеки логики (оставляем как есть)
 from squig2proq.parser import parse_filter_text, build_ffp
@@ -53,15 +60,43 @@ class SquigApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # 1. Загрузка дизайна
-        self.ui = Ui_MainWindow()
-        self.ui.setupUi(self)
+        # 1. Загрузка дизайна из файла gui.ui (runtime load)
+        ui_path = Path(__file__).resolve().parent / "gui.ui"
+        # Try to load the UI as generated class (replicates pyuic-generated behaviour)
+        try:
+            form_class, base_class = uic.loadUiType(str(ui_path))
+            self.ui = form_class()
+            self.ui.setupUi(self)
+        except Exception:
+            # Fallback: loadUi into this instance (older behaviour)
+            try:
+                uic.loadUi(str(ui_path), self)
+                self.ui = self
+            except Exception as e:
+                raise RuntimeError(f"Failed to load UI file {ui_path}: {e}")
+
+        # --- ИНИЦИАЛИЗАЦИЯ ГРАФИКА ---
+        # Создаем наш виджет графика
+        self.plot_widget = PlotWidget()
+
+        # Находим плейсхолдер из дизайнера (тот самый QWidget на второй вкладке)
+        # И вешаем на него Layout, чтобы график растянулся внутри него
+        plot_layout = QVBoxLayout(self.ui.plot_placeholder)
+        plot_layout.setContentsMargins(0, 0, 0, 0) # Чтобы график был от края до края
+        plot_layout.addWidget(self.plot_widget)
+        # Подписываемся на вращение колесика над графиком, чтобы менять громкость
+        try:
+            self.plot_widget.mouse_wheel += self._on_plot_wheel
+        except Exception:
+            pass
+        # -----------------------------
 
         # --- ЗАМЕНА ЛЕЙБЛОВ НА УМНЫЕ ---
         # Перезаписываем self.ui.path_label ссылкой на новый виджет
         self.ui.path_label = self.promote_label(self.ui.path_label)
         self.ui.ir_path_label = self.promote_label(self.ui.ir_path_label)
         self.ui.link_path_label = self.promote_label(self.ui.link_path_label)
+        self.ui.txt_path_label = self.promote_label(self.ui.txt_path_label)
 
         # 2. Настройка Drag & Drop (Включено в свойствах дизайнера, но логику пишем тут)
         self.setAcceptDrops(True)
@@ -80,6 +115,29 @@ class SquigApp(QMainWindow):
         # Переменные для хранения выбора в меню (sets)
         self.selected_fs = {48000}
         self.selected_ir_types = {"Linear Phase"}
+
+        # --- АУДИО МЕНЕДЖЕР ---
+        self.audio_manager = AudioManager() if SOUNDDEVICE_AVAILABLE else None
+        
+        # Если аудио недоступно, отключаем кнопки
+        if not self.audio_manager:
+            self.ui.refresh_audio_btn.setEnabled(False)
+            self.ui.test_audio_btn.setEnabled(False)
+            self.ui.audio_device_combo.setEnabled(False)
+            self.ui.volume_slr.setEnabled(False)
+            self.ui.statusbar.showMessage("Audio libraries not found (sounddevice)")
+        else:
+            # Сразу заполняем список устройств
+            self.refresh_audio_devices()
+            # Включаем режим ПКМ навсегда (как было в оригинале)
+            self.audio_manager.subscribe_right_click_tone(self.plot_widget)
+            # Init volume slider (logarithmic mapping)
+            try:
+                self.ui.volume_slr.setRange(0, 100)
+                self.ui.volume_slr.setValue(self.audio_manager.get_slider_value())
+                self.ui.volume_slr.setEnabled(True)
+            except Exception:
+                pass
 
         # 4. Инициализация UI (меню, привязки кнопок)
         self.setup_connections()
@@ -101,10 +159,38 @@ class SquigApp(QMainWindow):
         self.ui.ir_export_btn.clicked.connect(self.export_ir)
         
         self.ui.link_dir_btn.clicked.connect(lambda: self.choose_dir(self.ui.link_path_label, "link_wav_dir"))
-        
-        # Пример авто-обрезки пути при ресайзе (Qt делает это сам через elide, 
-        # но для Label нужно обновлять текст, пока оставим просто полный текст)
 
+        # --- ВТОРАЯ ВКЛАДКА ---
+        # Кнопка выбора папки
+        self.ui.txt_dir_btn.clicked.connect(self.choose_txt_dir)
+        # Кнопка сохранения
+        self.ui.txt_save_btn.clicked.connect(self.save_txt_filter)
+        # --- АУДИО ---
+        self.ui.refresh_audio_btn.clicked.connect(self.refresh_audio_devices)
+        self.ui.test_audio_btn.clicked.connect(self.toggle_audio_test)
+        # Volume slider -> application volume (0..100 mapped to 0.0..1.0)
+        try:
+            self.ui.volume_slr.valueChanged.connect(self.on_volume_change)
+        except Exception:
+            pass
+
+    def _on_plot_wheel(self, mouse_data):
+        """Изменяет позицию слайдера громкости при прокрутке колесика над графиком."""
+        try:
+            step = int(mouse_data.step) if mouse_data.step is not None else 0
+        except Exception:
+            step = 0
+        if step == 0:
+            return
+        # Один шаг колеса меняет слайдер на несколько пунктов для заметного эффекта
+        step_size = 3
+        try:
+            cur = int(self.ui.volume_slr.value())
+            new = max(0, min(100, cur + step * step_size))
+            self.ui.volume_slr.setValue(new)
+        except Exception:
+            pass
+        
     def setup_custom_menus(self):
         """Создаем выпадающие меню с чекбоксами для кнопок"""
         # Меню для Sample Rate
@@ -236,7 +322,9 @@ class SquigApp(QMainWindow):
             "window_width": 800, "window_height": 700,
             "fs_base": 48000, "preamp": 0.0, "tilt": 0.0,
             "subsonic": True, "subsonic_freq": 10.0,
-            "adjust_q": False, "override_name": False, "link_ir": False
+            "adjust_q": False, "override_name": False, "link_ir": False,
+            "txt_file_name": "MyFilter.txt",
+            "txt_save_dir": str(Path.home().as_posix()) 
         }
         
         config = {}
@@ -295,6 +383,29 @@ class SquigApp(QMainWindow):
         if self.current_file_path and os.path.exists(self.current_file_path):
             self.load_from_path(self.current_file_path, update_name=False)
 
+        # --- ВОССТАНОВЛЕНИЕ СОСТОЯНИЯ ВТОРОЙ ВКЛАДКИ ---
+        # 1. Имя файла
+        self.ui.txt_name_entry.setText(config.get("txt_file_name", defaults["txt_file_name"]))
+        # 2. Путь для сохранения (и переменная, и лейбл)
+        self.txt_save_dir = config.get("txt_save_dir", defaults["txt_save_dir"])
+        self.ui.txt_path_label.setText(self.txt_save_dir) # Лейбл может сам обрезаться, если это ElidedLabel
+        # -----------------------------------------------
+
+        # Восстановление аудио устройства
+        if "audio_device" in config:
+            idx = self.ui.audio_device_combo.findData(config["audio_device"])
+            if idx >= 0:
+                self.ui.audio_device_combo.setCurrentIndex(idx)
+        # Restore saved volume (0..1)
+        if self.audio_manager and "volume" in config:
+            try:
+                vol = float(config.get("volume", 0.2))
+                self.audio_manager.set_volume(vol)
+                # map amplitude to slider position (log scale)
+                self.ui.volume_slr.setValue(self.audio_manager.get_slider_value())
+            except Exception:
+                pass
+
         self.ensure_window_visible()
 
     def save_config(self):
@@ -304,6 +415,7 @@ class SquigApp(QMainWindow):
             "window_width": self.width(),
             "window_height": self.height(),
             
+            # --- ОСНОВНОЕ СОСТОЯНИЕ ПРИЛОЖЕНИЯ ---
             "last_file": self.current_file_path,
             "last_file_name": self.ui.name_entry.text(),
             
@@ -323,8 +435,22 @@ class SquigApp(QMainWindow):
             
             "fs_selected": list(self.selected_fs),
             "ir_type_selected": list(self.selected_ir_types),
-            "mixed_phase_ratio": self.mixed_phase_ratio
+            "mixed_phase_ratio": self.mixed_phase_ratio,
+            # ---------------------------------------
+
+            # --- СОСТОЯНИЕ ВТОРОЙ ВКЛАДКИ ---
+            "txt_file_name": self.ui.txt_name_entry.text(),
+            "txt_save_dir": getattr(self, "txt_save_dir", str(Path.home())),
+            # -----------------------------------
+
+            "audio_device": self.ui.audio_device_combo.currentData()
         }
+        # Save volume if available
+        try:
+            if self.audio_manager:
+                config["volume"] = self.audio_manager.get_volume()
+        except Exception:
+            pass
         
         try:
             self.config_dir.mkdir(parents=True, exist_ok=True)
@@ -519,8 +645,108 @@ class SquigApp(QMainWindow):
         self.ui.statusbar.showMessage(f"Exported {len(results_msg)} IRs.")
         self.save_config()
 
+    def choose_txt_dir(self):
+        """Выбор папки для сохранения TXT фильтра"""
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Directory for TXT", self.txt_save_dir)
+        if dir_path:
+            self.txt_save_dir = dir_path
+            self.ui.txt_path_label.setText(dir_path)
+            self.save_config()
+
+    def save_txt_filter(self):
+        """Сохранение фильтра (пока заглушка, как в старом main.py)"""
+        filename = self.ui.txt_name_entry.text().strip()
+        if not filename:
+            self.ui.statusbar.showMessage("Error: TXT filename is empty")
+            return
+            
+        if not hasattr(self, 'txt_save_dir') or not self.txt_save_dir:
+            self.ui.statusbar.showMessage("Error: Directory not selected")
+            return
+
+        # Если пользователь забыл .txt
+        if not filename.lower().endswith(".txt"):
+            filename += ".txt"
+            
+        out_path = Path(self.txt_save_dir) / filename
+        
+        try:
+            # Логика из старого main.py (export_txt_filter)
+            # В будущем здесь будет генерация реального текста фильтра
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write("# Placeholder for filter text\n")
+                
+            self.ui.statusbar.showMessage(f"TXT Saved: {out_path.name}")
+            self.save_config()
+            
+        except Exception as e:
+            self.ui.statusbar.showMessage(f"Error saving TXT: {e}")
+            print(f"Error: {e}")
+
+    def refresh_audio_devices(self):
+        """Обновление списка аудиоустройств в QComboBox"""
+        if not self.audio_manager: return
+        
+        # 1. Получаем список устройств [(id, name), ...]
+        devices = self.audio_manager.get_audio_output_devices()
+        
+        # 2. Сохраняем текущий выбранный ID (если был)
+        current_data = self.ui.audio_device_combo.currentData()
+        
+        # 3. Очищаем и заполняем заново
+        self.ui.audio_device_combo.clear()
+        for dev_id, name in devices:
+            # addItem(Текст, Данные) - в Qt можно хранить скрытые данные (ID устройства)
+            self.ui.audio_device_combo.addItem(name, dev_id)
+            
+        # 4. Пытаемся восстановить выбор
+        index = self.ui.audio_device_combo.findData(current_data)
+        if index >= 0:
+            self.ui.audio_device_combo.setCurrentIndex(index)
+        
+        self.ui.statusbar.showMessage(f"Found {len(devices)} audio devices")
+
+    def toggle_audio_test(self):
+        """Включение/выключение тестового тона"""
+        if not self.audio_manager: return
+
+        if self.audio_manager.is_tone_playing():
+            # ОСТАНОВКА
+            self.audio_manager.stop_tone()
+            # Отписываемся от движения мыши
+            self.audio_manager.unsubscribe_mouse_move()
+            
+            self.ui.test_audio_btn.setText("Test Audio")
+            self.ui.statusbar.showMessage("Audio stopped")
+        else:
+            # ЗАПУСК
+            dev_id = self.ui.audio_device_combo.currentData()
+            # Запускаем напрямую с текущей громкостью
+            vol = self.audio_manager.get_volume() if self.audio_manager else 0.2
+            success = self.audio_manager.start_tone(device_id=dev_id, frequency=1000.0, volume=vol)
+            
+            if success:
+                self.ui.test_audio_btn.setText("Stop Audio")
+                self.ui.statusbar.showMessage("Playing tone... Move mouse to change freq")
+                
+            else:
+                self.ui.statusbar.showMessage("Error starting audio")
+
+    def on_volume_change(self, value):
+        """Handle slider change (0..100) -> set application volume (0.0..1.0)."""
+        if not self.audio_manager: return
+        try:
+            v = max(0, min(100, int(value)))
+            # Use AudioManager mapping (log scale)
+            self.audio_manager.set_volume_from_slider(v)
+        except Exception:
+            pass
+
     def closeEvent(self, event):
         """Событие закрытия окна"""
+        # Останавливаем аудио, если играет
+        if hasattr(self, 'audio_manager') and self.audio_manager:
+            self.audio_manager.cleanup()
         self.save_config()
         event.accept()
 

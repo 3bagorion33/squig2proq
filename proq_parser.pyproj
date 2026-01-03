@@ -21,10 +21,11 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="setup.py" />
+    <Compile Include="squig2proq\audio.py" />
     <Compile Include="squig2proq\data\__init__.py" />
-    <Compile Include="squig2proq\gui.py" />
     <Compile Include="squig2proq\ir_utils.py" />
     <Compile Include="squig2proq\parser.py" />
+    <Compile Include="squig2proq\plot_qt.py" />
     <Compile Include="squig2proq\__init__.py" />
     <Compile Include="squig2proq\__main__.py" />
   </ItemGroup>
@@ -38,6 +39,7 @@
     <Content Include=".github\workflows\build_exe.yml" />
     <Content Include="README.md" />
     <Content Include="requirements.txt" />
+    <Content Include="squig2proq\gui.ui" />
   </ItemGroup>
   <ItemGroup>
     <Interpreter Include="venv\">

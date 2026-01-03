@@ -29,7 +29,10 @@ def compile_ui():
             # os.system(f"pyside6-uic {ui_file} -o {py_file}") # Для PySide6
             pass
 
-compile_ui()
+# NOTE: We no longer auto-compile the .ui to .py at import time.
+# The application now loads `gui.ui` at runtime using `uic.loadUi`.
+# If you still need to compile the .ui file to .py manually, call
+# `compile_ui()` from a script or build step.
 
 # --- ЗАПУСК ПРИЛОЖЕНИЯ ---
 from squig2proq.__main__ import main

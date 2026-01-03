@@ -176,25 +176,9 @@ class IRCreator:
             # Новая частота Найквиста
             nyquist_bins_target = n_target // 2 + 1
             
-            # Ширина зоны затухания (в бинах частоты)
-            # Уменьшаем область плавного перехода и делаем кривую более крутой
-            fade_bins = max(1, nyquist_bins_target // 100)  # уже, более резкий переход (~0.25% от диапазона)
-            fade_start = nyquist_bins_target - fade_bins
-
             # Копируем низкие частоты без изменений
-            spectrum_target[:fade_start] = spectrum[:fade_start]
+            spectrum_target[:nyquist_bins_target] = spectrum[:nyquist_bins_target]
 
-            # Применяем более резкое затухание к высоким частотам перед частотой Найквиста
-            if fade_start < nyquist_bins_target:
-                fade_indices = np.arange(fade_start, nyquist_bins_target)
-                # Создаем более крутое окно на основе косинуса и повышаем его в квадрат
-                # чтобы получить steeper roll-off (меньше утечки в области обрезки)
-                t = (fade_indices - fade_start) / float(max(1, fade_bins))
-                fade_window = (0.5 * (1 + np.cos(np.pi * t))) ** 2
-                spectrum_target[fade_start:nyquist_bins_target] = (
-                    spectrum[fade_start:nyquist_bins_target] * fade_window
-                )
-            
             # Восстанавливаем эрмитову симметрию для отрицательных частот
             if n_target % 2 == 0:  # четная длина
                 spectrum_target[n_target-nyquist_bins_target+2:] = np.conj(
