@@ -113,6 +113,7 @@ class IRCreator:
             self,
             ir: np.ndarray, 
             fs: int,
+            type = 'default',
             f_correction: int = 0
         ) -> np.ndarray:
         """
@@ -133,9 +134,9 @@ class IRCreator:
         """
         if self.fs_base == fs:
             return ir
-        
+
         # Вычисляем спектр исходной ИХ
-        spectrum = fft(ir)
+        spectrum = transform(ir, type)
         n_original = len(spectrum)
         
         # Вычисляем новую длину, сохраняя временную длительность сигнала
@@ -144,53 +145,23 @@ class IRCreator:
 
         if fs > self.fs_base:
         # Апсемплинг: экстраполируем высокие частоты
-            spectrum_target = np.zeros(n_target, dtype=np.complex128)
+            spectrum_target = np.zeros(n_target, dtype=np.float64)
             
-            # Копируем низкие частоты (до частоты Найквиста исходного сигнала)
-            nyquist_bins = n_original // 2 + 1
+            # Копируем низкие частоты до fs
+            nyquist_bins = n_original
             spectrum_target[:nyquist_bins] = spectrum[:nyquist_bins]
             
-            # Экстраполируем высокие частоты значением на частоте Найквиста
-            # Для положительных частот
-            if nyquist_bins < n_target // 2 + 1:
-                last_value = spectrum[nyquist_bins - 1]  # Последнее значение на Найквисте
-                spectrum_target[nyquist_bins:n_target//2 + 1] = last_value
+            # Экстраполируем высокие частоты значением на частоте fs
+            last_value = spectrum[nyquist_bins-1]
+            spectrum_target[nyquist_bins:n_target-1] = last_value
             
-            # Восстанавливаем эрмитову симметрию для отрицательных частот
-            if n_original % 2 == 0:  # четная длина
-                # Копируем симметричную часть исходного спектра
-                spectrum_target[n_target-nyquist_bins+2:] = np.conj(spectrum[nyquist_bins-2:0:-1])
-                # Экстраполируем отрицательные высокие частоты
-                if n_target // 2 + 1 > nyquist_bins:
-                    last_negative = np.conj(last_value)
-                    spectrum_target[n_target//2 + 1:n_target-nyquist_bins+2] = last_negative
-            else:  # нечетная длина
-                spectrum_target[n_target-nyquist_bins+1:] = np.conj(spectrum[nyquist_bins-1:0:-1])
-                if n_target // 2 + 1 > nyquist_bins:
-                    last_negative = np.conj(last_value)
-                    spectrum_target[n_target//2 + 1:n_target-nyquist_bins+1] = last_negative
+            # Преобразуем обратно во временную область
+            ir_resampled = itransform(spectrum_target, type)
+
         else:
-            # Даунсемплинг с плавным затуханием к частоте Найквиста
-            spectrum_target = np.zeros(n_target, dtype=np.complex128)
-            
-            # Новая частота Найквиста
-            nyquist_bins_target = n_target // 2 + 1
-            
-            # Копируем низкие частоты без изменений
-            spectrum_target[:nyquist_bins_target] = spectrum[:nyquist_bins_target]
+        # Даунсемплинг с резким обрезанием высоких частот
+            ir_resampled = itransform(spectrum[:n_target], type)
 
-            # Восстанавливаем эрмитову симметрию для отрицательных частот
-            if n_target % 2 == 0:  # четная длина
-                spectrum_target[n_target-nyquist_bins_target+2:] = np.conj(
-                    spectrum_target[nyquist_bins_target-2:0:-1]
-                )
-            else:  # нечетная длина
-                spectrum_target[n_target-nyquist_bins_target+1:] = np.conj(
-                    spectrum_target[nyquist_bins_target-1:0:-1]
-                )
-
-        # Преобразуем обратно во временную область
-        ir_resampled = ifft(spectrum_target).real
         return ir_resampled
 
     def peak_norm(self, ir: np.ndarray) -> np.ndarray:
@@ -203,13 +174,12 @@ class IRCreator:
             return ir
             
         # 1. Вычисляем размер FFT. 
-        # Используем 8-кратный оверсемплинг в частотной области или минимум 65536 точек.
+        # Используем 16-кратный оверсемплинг в частотной области или минимум 65536 точек.
         # Это нужно, чтобы найти "истинный" пик, который может попасть между стандартными бинами FFT.
-        n_fft = max(len(ir) * 8, 65536)
+        n_fft = max(len(ir) * 16, 65536)
         
         # 2. Получаем амплитудный спектр
-        # rfft быстрее для действительных чисел (возвращает только половину спектра)
-        spectrum = np.abs(np.fft.rfft(ir, n=n_fft))
+        spectrum = fft(ir, n=n_fft)
         
         # 3. Находим текущий максимум магнитуды
         current_max = np.max(spectrum)
@@ -284,7 +254,7 @@ class IRCreator:
      
         # Ресемплинг до целевой частоты, если необходимо
         if self.fs_base != fs:
-            out = self._resample(out, fs, 32)
+            out = self._resample(out, fs, 'min_phase', 0) # было +32 семпла, теперь вроде не надо
             # Обрезаем или дополняем до нужной длины
             if len(out) > length:
                 out = out[:length]
@@ -370,7 +340,7 @@ class IRCreator:
         # Ресемплинг до целевой частоты, если необходимо
         if self.fs_base != fs:
             half_fir = out[len(out) // 2:]
-            half_fir = self._resample(half_fir, fs, 0)
+            half_fir = self._resample(half_fir, fs, 'lin_phase', 0)
             out = np.concatenate([np.flipud(half_fir), half_fir[1:], half_fir[-1:]], axis=None)
 
             # Обрезаем или дополняем до нужной длины
@@ -423,7 +393,7 @@ class IRCreator:
 
         # Получаем ИХ для НЧ (минимальная фаза) и ВЧ (линейная фаза) частей
         lp_ir = self.min_phase(fs, length=lp_len, coeffs=self._lp_coeffs_cache, fade=False, norm=False)
-        hp_ir = self.lin_phase(fs, length=hp_len, coeffs=self._hp_coeffs_cache, fade=True, norm=False)
+        hp_ir = self.lin_phase(fs, length=hp_len, coeffs=self._hp_coeffs_cache, fade=False, norm=False)
 
         # Правильная задержка для совмещения фаз
         delay_samples = hp_len // 2
@@ -561,3 +531,53 @@ def db_to_amp(gain_db: float) -> float:
     Преобразует усиление из дБ в амплитудный множитель.
     """
     return 10 ** (gain_db / 20)
+
+def transform(
+        ir: np.ndarray,
+        type: str = 'default'
+    ) -> np.ndarray:
+    """
+    Применяет преобразование к импульсной характеристике.
+    Parameters
+    ----------
+    ir : np.ndarray
+        Входная импульсная характеристика
+        type : str, optional
+        Тип преобразования: 'default', 'min_phase', 'lin_phase'
+    Returns
+    -------
+        np.ndarray
+        Преобразованная импульсная характеристика
+    """
+    match type:
+        case 'default':
+            return fft(ir)
+        case 'lin_phase':
+            return dct(ir, type=3, norm='forward')
+        case 'min_phase':
+            return dct(ir, type=3, norm='ortho')
+
+def itransform(
+        spectrum: np.ndarray,
+        type: str = 'default'
+    ) -> np.ndarray:
+    """
+    Применяет обратное преобразование к спектру импульсной характеристики.
+    Parameters
+    ----------
+    spectrum : np.ndarray
+        Входной спектр импульсной характеристики
+        type : str, optional
+        Тип преобразования: 'default', 'min_phase', 'lin_phase'
+    Returns
+    -------
+        np.ndarray
+        Обратное преобразованная импульсная характеристика
+    """
+    match type:
+        case 'default':
+            return ifft(spectrum).real
+        case 'lin_phase':
+            return idct(spectrum, type=3, norm='backward')
+        case 'min_phase':
+            return idct(spectrum, type=3, norm='ortho')
